@@ -1,6 +1,7 @@
 use serde::Serialize;
 use wmi::WMIConnection;
 use anyhow::Result;
+use colored::*;
 
 #[derive(Debug, Serialize)]
 pub struct OSInfo {
@@ -37,4 +38,19 @@ impl OSInfo {
 
     }
     
+}
+
+pub fn get_os_info() -> String {
+    match OSInfo::gather() {
+        Ok(info) => {
+            format!("OS: {}\nBuild: {}\nVersion: {}", 
+                info.caption.green(),
+                info.build_number,
+                info.version
+            ).to_string()
+        }
+        Err(e) => {
+            format!("Error Gathering OS Information: {}", e).to_string()
+        }
+    }
 }
