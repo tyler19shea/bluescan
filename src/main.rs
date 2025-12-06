@@ -1,13 +1,34 @@
+#[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "linux")]
+mod linux;
+
 mod nvd_query;
 mod osv_query; 
 
 use colored::*;
-// use windows::os_info::get_os_info;
+use serde::Serialize;
+
 use windows::installed_programs::get_installed_programs;
 use std::env::args;
 
-use crate::windows::installed_programs::InstalledProgram;
+#[derive(Debug, Serialize)]
+pub struct InstalledProgram {
+    pub name: String,
+    pub version: Option<String>,
+    pub publisher: Option<String>,
+    pub install_date: Option<String>
+}
+
+#[derive(Debug, Serialize)]
+pub struct OSInfo {
+    pub os_name: String,
+    pub version: String,
+    pub build_number: String,
+    pub install_date: Option<String>,
+    pub hostname: String,
+    pub arch: String
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()>{
@@ -23,9 +44,10 @@ async fn main() -> anyhow::Result<()>{
         println!("  -a  Show all installed programs");
         println!("  -s  Scan for vulnerabilities (NVD)");
         println!("  -v  Scan for vulnerabilities (OSV - faster, no rate limits)");
+        println!("  -h  HYBRID scan: OSV first, NVD fallback (RECOMMENDED)");
     } else if args.len() < 5 {
         if args.contains(&"-o".to_string()) {
-            println!("{}", windows::os_info::get_os_info());
+            println!("{}", print_os_info());
         } if args.contains(&"-p".to_string()) {
             println!("{}: {}", "Installed Programs".green(), programs.len());
         } if args.contains(&"-a".to_string()) {
@@ -40,6 +62,9 @@ async fn main() -> anyhow::Result<()>{
         } if args.contains(&"-v".to_string()) {
             println!("{}", "Scanning with OSV (fast, no rate limits)...".green());
             scan_with_osv(&programs).await?;
+        } if args.contains(&"-h".to_string()) {
+            println!("{}", "HYBRID SCAN: OSV + NVD fallback (RECOMMENDED)".cyan().bold());
+            hybrid_scan(&programs).await?;
         }
         
     } else {
@@ -47,6 +72,113 @@ async fn main() -> anyhow::Result<()>{
     }
 
     Ok(())
+}
+
+async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
+    let mut vulnerable_count = 0;
+    let mut safe_count = 0;
+    let mut nvd_checked_count = 0;
+    let mut scanned_count = 0;
+    
+    println!("\n{}", "Starting HYBRID vulnerability scan...".cyan().bold());
+    println!("{}", "Strategy: Try OSV first (fast), fallback to NVD for unchecked programs".dimmed());
+    println!("{}", "=".repeat(70).cyan());
+    
+    for program in programs {
+        scanned_count += 1;
+        let version = program.version.clone().unwrap_or("unknown".into());
+        
+        println!("\n[{}/{}] {}", scanned_count, programs.len(), 
+                 format!("{} {}", program.name.bright_white(), version.dimmed()).bold());
+        
+        // STEP 1: Try OSV first (fast, no rate limits)
+        match osv_query::search_vulns_osv(program).await {
+            Ok(osv_query::ScanResult::Vulnerable(vulns)) => {
+                println!("  {} OSV: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                vulnerable_count += 1;
+                for v in &vulns {
+                    println!("    {}", v.yellow());
+                }
+                continue; // Found in OSV, no need to check NVD
+            }
+            Ok(osv_query::ScanResult::Safe) => {
+                println!("  {} OSV: Checked in package ecosystems - Safe", "✓".green());
+                safe_count += 1;
+                continue; // Verified safe in OSV
+            }
+            Ok(osv_query::ScanResult::Unchecked(_reason)) => {
+                println!("  {} OSV: Not in package ecosystem", "○".dimmed());
+                println!("  {} Falling back to NVD...", "→".cyan());
+                // Fall through to NVD check
+            }
+            Err(e) => {
+                println!("  {} OSV Error: {}", "✗".red(), e.to_string().dimmed());
+                // Fall through to NVD check
+            }
+        }
+        
+        // STEP 2: Check NVD for programs not in OSV
+        nvd_checked_count += 1;
+        
+        // Add delay to respect NVD rate limits (5 requests per 30 seconds)
+        if nvd_checked_count > 1 {
+            println!("  {} Waiting 6 seconds (NVD rate limit)...", "⏱".yellow());
+            tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
+        }
+        
+        match check_nvd_with_timeout(program).await {
+            Ok(vulns) => {
+                if vulns.is_empty() {
+                    println!("  {} NVD: No known vulnerabilities", "✓".green());
+                    safe_count += 1;
+                } else {
+                    println!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                    vulnerable_count += 1;
+                    for v in &vulns {
+                        println!("    {}", v.yellow());
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
+            }
+        }
+    }
+    
+    println!("\n{}", "=".repeat(70).cyan());
+    println!("{}", "Scan Complete!".cyan().bold());
+    println!("Total programs scanned: {}", scanned_count);
+    println!("Vulnerable programs: {}", 
+             if vulnerable_count > 0 { 
+                 vulnerable_count.to_string().red().to_string() 
+             } else { 
+                 vulnerable_count.to_string().green().to_string() 
+             });
+    println!("Safe programs: {}", safe_count.to_string().green());
+    println!("Programs checked with NVD: {}", nvd_checked_count.to_string().cyan());
+    
+    // println!("\n{}", "💡 TIP:".yellow().bold());
+    // println!("To speed up future scans, get a free NVD API key at:");
+    // println!("https://nvd.nist.gov/developers/request-an-api-key");
+    // println!("With an API key, you can make 50 requests per 30 seconds instead of 5!");
+    
+    Ok(())
+}
+
+async fn check_nvd_with_timeout(program: &InstalledProgram) -> anyhow::Result<Vec<String>> {
+    let version = program.version.clone().unwrap_or("".into());
+    let query = format!("{} {}", program.name, version);
+    
+    // Add timeout to prevent hanging on NVD
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(15),
+        nvd_query::search_vulns_nvd(&query)
+    ).await {
+        Ok(result) => result,
+        Err(_) => {
+            Err(anyhow::anyhow!("NVD request timed out after 15 seconds"))
+        }
+    }
 }
 
 async fn get_vulns_nvd(program: &InstalledProgram) -> anyhow::Result<()> {
@@ -132,4 +264,12 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     }
     
     Ok(())
+}
+
+pub fn print_os_info() -> String {
+    #[cfg(target_os = "windows")]
+    return windows::os_info::print_os_info();
+
+    #[cfg(target_os = "linux")]
+    return linux::linuxos::print_os_info();
 }

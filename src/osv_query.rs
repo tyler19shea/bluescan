@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use crate::windows::installed_programs::InstalledProgram;
+use crate::InstalledProgram;
 use std::result::Result::Ok;
 
 #[derive(Debug, Serialize)]
@@ -135,7 +135,7 @@ pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> 
     
     // DECISION POINT
     if checked_any_ecosystem && check_likely_ecosystem {
-        println!("  → Program checked across ecosystems - appears safe");
+        println!("  → Program checked across ecosystems - appears safe ({:?})", likely_ecosystems);
         Ok(ScanResult::Safe)
     } else if checked_any_ecosystem {
         Ok(ScanResult::Unchecked(
@@ -170,7 +170,7 @@ async fn query_osv_with_ecosystem(
         },
     };
     
-    print!("→ Sending to OSV: ecosystem='{}'::", ecosystem);
+    print!("ecosystem checked='{}'::", ecosystem);
 
     let response = client
         .post(url)

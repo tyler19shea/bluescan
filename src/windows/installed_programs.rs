@@ -1,16 +1,8 @@
-//use anyhow::Ok;
 use anyhow::Result;
-use serde::Serialize;
 use winreg::enums::*;
 use winreg::RegKey;
+use crate::InstalledProgram;
 
-#[derive(Debug, Serialize)]
-pub struct InstalledProgram {
-    pub name: String,
-    pub version: Option<String>,
-    pub publisher: Option<String>,
-    pub install_date: Option<String>
-}
 
 pub fn get_installed_programs() -> Result<Vec<InstalledProgram>>{
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
