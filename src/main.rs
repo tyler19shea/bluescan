@@ -1,16 +1,15 @@
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
 mod linux;
 
 mod nvd_query;
 mod osv_query; 
 mod get_os_info;
 
+//use anyhow::Ok;
+use std::result::Result::Ok;
 use colored::*;
 use serde::Serialize;
-
-use windows::installed_programs::get_installed_programs;
 use std::env::args;
 
 #[derive(Debug, Serialize)]
@@ -32,7 +31,8 @@ pub struct OSInfo {
 #[tokio::main]
 async fn main() -> anyhow::Result<()>{
     let args: Vec<String> = args().collect();
-    let programs = get_installed_programs()?;
+    let programs = get_installed_programs();
+    //installed_programs::get_installed_programs()?;
 
     println!("{}", "=== BlueScan-AI (Windows Edition) ===".blue().bold());
     if args.len() < 2 {
@@ -55,9 +55,10 @@ async fn main() -> anyhow::Result<()>{
             }
         } if args.contains(&"-s".to_string()) {
             println!("{}", "Scanning with NVD (may be slow due to rate limits)...".yellow());
-            for p in &programs {
-                get_vulns_nvd(p).await?;
-            }
+            // for p in &programs {
+            get_vulns_nvd(&programs).await?;
+                //check_nvd_with_timeout(p).await?;
+            //}
         } if args.contains(&"-v".to_string()) {
             println!("{}", "Scanning with OSV (fast, no rate limits)...".green());
             scan_with_osv(&programs).await?;
@@ -71,6 +72,32 @@ async fn main() -> anyhow::Result<()>{
     }
 
     Ok(())
+}
+
+fn get_installed_programs() -> Vec<InstalledProgram>{
+    let os_name = match OSInfo::gather() {
+        Ok(info) => format!("{}", info.os_name),
+        Err(e) => format!("Failed {}", e),
+    };
+    if os_name == "Windows" {
+        match windows::installed_programs::get_installed_programs() {
+            Ok(programs) => programs,
+            Err(e) => {
+                eprintln!("Error getting installed programs: {}", e);
+                Vec::new()
+            }
+        }
+    } else if os_name == "Linux" {
+        match linux::linuxos::get_installed_programs() {
+            Ok(programs) => programs,
+            Err(e) => {
+                eprintln!("Error getting installed programs: {}", e);
+                Vec::new()
+            }
+        }
+    }else {
+        Vec::new()
+    }
 }
 
 async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
@@ -180,17 +207,51 @@ async fn check_nvd_with_timeout(program: &InstalledProgram) -> anyhow::Result<Ve
     }
 }
 
-async fn get_vulns_nvd(program: &InstalledProgram) -> anyhow::Result<()> {
-    let version = program.version.clone().unwrap_or("".into());
-    let query = format!("{} {}", program.name, version);
-    let vuln = nvd_query::search_vulns_nvd(&query).await?;
-    if vuln.is_empty() {
-        println!("No known vulnerabilities for {} {}", program.name, version);
-    } else {
-        println!("Vulnerabilities for {} {:?}:", program.name, version);
-        for v in vuln {
-            println!("  - {}", v);
+async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
+    let mut vulnerable_count = 0;
+    let mut safe_count = 0;
+    let mut failed_count = 0;
+    let mut scanned_count = 0;
+    
+    println!("\n{}", "Starting NVD vulnerability scan...".cyan().bold());
+    for program in programs {
+        tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
+        match check_nvd_with_timeout(program).await {
+            Ok(vulns) => {
+                if vulns.is_empty() {
+                    match &program.version {
+                        Some(version) => println!("  {} NVD: No known vulnerabilities of {} {:?}", "✓".green(), program.name, version),
+                        None => println!("No Version found for {}", program.name),
+                    }
+                    safe_count += 1;
+                } else {
+                    println!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                    for v in &vulns {
+                        println!("    {}", v.yellow());
+                    }
+                    vulnerable_count += 1;
+                }
+                scanned_count += 1;
+            }
+            Err(e) => {
+                println!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
+                failed_count += 1;
+            }
         }
+        scanned_count += 1
+    }
+        println!("\n{}", "=".repeat(70).cyan());
+    println!("{}", "Scan Complete!".cyan().bold());
+    println!("Total programs scanned: {}", scanned_count);
+    println!("Vulnerable programs: {}", 
+             if vulnerable_count > 0 { 
+                 vulnerable_count.to_string().red().to_string() 
+             } else { 
+                 vulnerable_count.to_string().green().to_string() 
+             });
+    println!("Safe programs: {}", safe_count.to_string().green());
+    if failed_count != 0 {
+        println!("Failed  scanned programs: {}", failed_count.to_string().red());
     }
     Ok(())
 }
@@ -258,7 +319,7 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         println!("\n{}", "⚠ WARNING:".yellow().bold());
         println!("Some or most programs could not be verfied because they're not found in likely package ecosystems.");
         println!("OSV primarily covers open-source packages from npm, PyPI, Maven, etc.");
-        println!("For comprehensive Windows application scanning, consider using NVD API (with API key)");
+        println!("For comprehensive Windows application scanning, consider using NVD");
         println!("or a dedicated Windows vulnerability scanner.");
     }
     

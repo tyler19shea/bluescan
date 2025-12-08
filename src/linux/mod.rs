@@ -1,1 +1,1 @@
-mod linuxos;
+pub mod linuxos;
