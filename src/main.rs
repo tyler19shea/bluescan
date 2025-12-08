@@ -5,6 +5,7 @@ mod linux;
 
 mod nvd_query;
 mod osv_query; 
+mod get_os_info;
 
 use colored::*;
 use serde::Serialize;
@@ -24,8 +25,6 @@ pub struct InstalledProgram {
 pub struct OSInfo {
     pub os_name: String,
     pub version: String,
-    pub build_number: String,
-    pub install_date: Option<String>,
     pub hostname: String,
     pub arch: String
 }
@@ -47,7 +46,7 @@ async fn main() -> anyhow::Result<()>{
         println!("  -h  HYBRID scan: OSV first, NVD fallback (RECOMMENDED)");
     } else if args.len() < 5 {
         if args.contains(&"-o".to_string()) {
-            println!("{}", print_os_info());
+            println!("{}", get_os_info::print_os_info());
         } if args.contains(&"-p".to_string()) {
             println!("{}: {}", "Installed Programs".green(), programs.len());
         } if args.contains(&"-a".to_string()) {
@@ -264,12 +263,4 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     }
     
     Ok(())
-}
-
-pub fn print_os_info() -> String {
-    #[cfg(target_os = "windows")]
-    return windows::os_info::print_os_info();
-
-    #[cfg(target_os = "linux")]
-    return linux::linuxos::print_os_info();
 }
