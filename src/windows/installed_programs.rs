@@ -1,3 +1,5 @@
+///Will only be configured on windows
+
 use anyhow::Result;
 use winreg::enums::*;
 use winreg::RegKey;

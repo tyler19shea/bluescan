@@ -1,12 +1,12 @@
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "linux")]
 mod linux;
 
 mod nvd_query;
 mod osv_query; 
 mod get_os_info;
 
-//use anyhow::Ok;
 use std::result::Result::Ok;
 use colored::*;
 use serde::Serialize;
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()>{
     let programs = get_installed_programs();
     //installed_programs::get_installed_programs()?;
 
-    println!("{}", "=== BlueScan-AI (Windows Edition) ===".blue().bold());
+    println!("{}", "=== BlueScan-AI ===".blue().bold());
     if args.len() < 2 {
         println!("Usage: bluescan_ai <option>");
         println!("Options:");
@@ -74,30 +74,32 @@ async fn main() -> anyhow::Result<()>{
     Ok(())
 }
 
-fn get_installed_programs() -> Vec<InstalledProgram>{
-    let os_name = match OSInfo::gather() {
-        Ok(info) => format!("{}", info.os_name),
-        Err(e) => format!("Failed {}", e),
-    };
-    if os_name == "Windows" {
-        match windows::installed_programs::get_installed_programs() {
-            Ok(programs) => programs,
-            Err(e) => {
-                eprintln!("Error getting installed programs: {}", e);
-                Vec::new()
-            }
+#[cfg(target_os = "windows")]
+fn get_installed_programs() -> Vec<InstalledProgram> {
+    match windows::installed_programs::get_installed_programs() {
+        Ok(programs) => programs,
+        Err(e) => {
+            eprintln!("Error getting installed programs: {}", e);
+            Vec::new()
         }
-    } else if os_name == "Linux" {
-        match linux::linuxos::get_installed_programs() {
-            Ok(programs) => programs,
-            Err(e) => {
-                eprintln!("Error getting installed programs: {}", e);
-                Vec::new()
-            }
-        }
-    }else {
-        Vec::new()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn get_installed_programs() -> Vec<InstalledProgram> {
+    match linux::linuxos::get_installed_programs() {
+        Ok(programs) => programs,
+        Err(e) => {
+            eprintln!("Error getting installed programs: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn get_installed_programs() -> Vec<InstalledProgram> {
+    eprintln!("Unsupported OS: This feature is only available on Windows and Linux.");
+    Vec::new()
 }
 
 async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
@@ -105,6 +107,7 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut safe_count = 0;
     let mut nvd_checked_count = 0;
     let mut scanned_count = 0;
+    let mut vulnerable_programs: Vec<String> = Vec::new();
     
     println!("\n{}", "Starting HYBRID vulnerability scan...".cyan().bold());
     println!("{}", "Strategy: Try OSV first (fast), fallback to NVD for unchecked programs".dimmed());
@@ -163,6 +166,7 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
                     for v in &vulns {
                         println!("    {}", v.yellow());
                     }
+                    vulnerable_programs.extend(vulns);
                 }
             }
             Err(e) => {
@@ -182,6 +186,10 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
              });
     println!("Safe programs: {}", safe_count.to_string().green());
     println!("Programs checked with NVD: {}", nvd_checked_count.to_string().cyan());
+    println!("Vulnerable programs:");
+    for v in vulnerable_programs {
+        println!("{}", v);
+    }
     
     // println!("\n{}", "💡 TIP:".yellow().bold());
     // println!("To speed up future scans, get a free NVD API key at:");
@@ -212,6 +220,7 @@ async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut safe_count = 0;
     let mut failed_count = 0;
     let mut scanned_count = 0;
+    let mut vulnerable_programs: Vec<String> = Vec::new();
     
     println!("\n{}", "Starting NVD vulnerability scan...".cyan().bold());
     for program in programs {
@@ -229,6 +238,7 @@ async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
                     for v in &vulns {
                         println!("    {}", v.yellow());
                     }
+                    vulnerable_programs.extend(vulns);
                     vulnerable_count += 1;
                 }
                 scanned_count += 1;
@@ -253,6 +263,10 @@ async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     if failed_count != 0 {
         println!("Failed  scanned programs: {}", failed_count.to_string().red());
     }
+    println!("Vulnerable programs:");
+    for v in vulnerable_programs {
+        println!("{}", v);
+    }
     Ok(())
 }
 
@@ -262,6 +276,7 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut unchecked_count = 0;
     let mut unverified_count = 0;
     let mut scanned_count = 0;
+    let mut vulnerable_programs: Vec<String> = Vec::new();
     
     println!("\n{}", "Starting vulnerability scan...".cyan().bold());
     println!("{}", "=".repeat(60).cyan());
@@ -280,6 +295,7 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
                 for v in &vulns {
                     println!("    {}", v.yellow());
                 }
+                vulnerable_programs.extend(vulns);
             }
             Ok(osv_query::ScanResult::Safe) => {
                 println!("{}", "✓ Safe (checked in package ecosystems)".green());
@@ -313,6 +329,11 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     println!("Safe programs: {}", safe_count.to_string().green());
     println!("Unverified programs {}", unverified_count.to_string().yellow());
     println!("Could not check: {} (not in package ecosystems)", unchecked_count.to_string().yellow());
+
+    println!("Vulnerable programs:");
+    for v in vulnerable_programs {
+        println!("{}", v);
+    }
     
     // Add warning if many programs couldn't be checked
     if unverified_count > safe_count + vulnerable_count || unchecked_count > safe_count + vulnerable_count {
