@@ -7,7 +7,8 @@ mod nvd_query;
 mod osv_query; 
 mod get_os_info;
 
-use std::result::Result::Ok;
+use std::{fs::OpenOptions, io::{self, Write}, result::Result::Ok};
+//use anyhow::Ok;
 use colored::*;
 use serde::Serialize;
 use std::env::args;
@@ -174,7 +175,10 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
             }
         }
     }
-    
+    match write_file(&vulnerable_programs) {
+        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => println!("Error writing to file {}", e),
+    }
     println!("\n{}", "=".repeat(70).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
     println!("Total programs scanned: {}", scanned_count);
@@ -190,11 +194,6 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     for v in vulnerable_programs {
         println!("{}", v);
     }
-    
-    // println!("\n{}", "💡 TIP:".yellow().bold());
-    // println!("To speed up future scans, get a free NVD API key at:");
-    // println!("https://nvd.nist.gov/developers/request-an-api-key");
-    // println!("With an API key, you can make 50 requests per 30 seconds instead of 5!");
     
     Ok(())
 }
@@ -250,7 +249,11 @@ async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         }
         scanned_count += 1
     }
-        println!("\n{}", "=".repeat(70).cyan());
+    match write_file(&vulnerable_programs) {
+        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => println!("Error writing to file {}", e),
+    }
+    println!("\n{}", "=".repeat(70).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
     println!("Total programs scanned: {}", scanned_count);
     println!("Vulnerable programs: {}", 
@@ -316,7 +319,10 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         // Small delay to be nice to the API
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
-    
+    match write_file(&vulnerable_programs) {
+        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => println!("Error writing to file {}", e),
+    }
     println!("\n{}", "=".repeat(60).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
     println!("Total programs scanned: {}", scanned_count);
@@ -344,5 +350,22 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         println!("or a dedicated Windows vulnerability scanner.");
     }
     
+    Ok(())
+}
+
+fn write_file(vulns: &Vec<String>) -> io::Result<()> {
+    let file_path = std::path::Path::new("vulnerable.txt");
+    if file_path.exists() {
+        std::fs::remove_file(file_path)?;
+    }
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file_path)
+        .expect("Unable to write to file");
+    for v in vulns{
+        file.write_all(v.as_bytes()).expect("Unable to append to file");
+        file.write_all(b"\n").expect("Unable to append to file");
+    }
     Ok(())
 }
