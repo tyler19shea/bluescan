@@ -34,9 +34,9 @@ async fn main() -> anyhow::Result<()>{
     let programs = get_installed_programs();
     //installed_programs::get_installed_programs()?;
 
-    println!("{}", "=== BlueScan-AI ===".blue().bold());
+    println!("{}", "=== BlueScan ===".blue().bold());
     if args.len() < 2 {
-        println!("Usage: bluescan_ai <option>");
+        println!("Usage: bluescan <option>");
         println!("Options:");
         println!("  -o  Show OS information");
         println!("  -p  Show number of installed programs");

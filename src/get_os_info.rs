@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use os_info;
 use anyhow::Result;
 use colored::*;
@@ -12,8 +14,21 @@ impl OSInfo {
             .to_string_lossy()
             .into_owned();
 
-        let version_string = info.version().to_string();
+        let mut version_string = info.version().to_string();
         let os_name = info.os_type().to_string();
+
+        if version_string == "Unknown" {
+            let output = Command::new("uname")
+                .arg("-r")
+                .output()
+                .unwrap();
+            if output.status.success() {
+                version_string = str::from_utf8(&output.stdout)
+                    .expect("failed to gather kernel version")
+                    .to_string()
+                    .replace("\n", "");
+            } 
+        }
 
 
         Ok(OSInfo {
