@@ -2,6 +2,8 @@
 mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 mod nvd_query;
 mod osv_query; 
@@ -33,7 +35,6 @@ pub struct OSInfo {
 async fn main() -> anyhow::Result<()>{
     let args: Vec<String> = args().collect();
     let programs = get_installed_programs();
-    //installed_programs::get_installed_programs()?;
 
     println!("{}", "=== BlueScan ===".blue().bold());
     if args.len() < 2 {
@@ -56,10 +57,7 @@ async fn main() -> anyhow::Result<()>{
             }
         } if args.contains(&"-s".to_string()) {
             println!("{}", "Scanning with NVD (may be slow due to rate limits)...".yellow());
-            // for p in &programs {
             get_vulns_nvd(&programs).await?;
-                //check_nvd_with_timeout(p).await?;
-            //}
         } if args.contains(&"-v".to_string()) {
             println!("{}", "Scanning with OSV (fast, no rate limits)...".green());
             scan_with_osv(&programs).await?;
@@ -97,7 +95,18 @@ fn get_installed_programs() -> Vec<InstalledProgram> {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn get_installed_programs() -> Vec<InstalledProgram> {
+    match macos::macos_programs::get_installed_programs() {
+        Ok(programs) => programs,
+        Err(e) => {
+            eprintln!("Error getting installed programs: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn get_installed_programs() -> Vec<InstalledProgram> {
     eprintln!("Unsupported OS: This feature is only available on Windows and Linux.");
     Vec::new()
