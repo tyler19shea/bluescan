@@ -62,14 +62,17 @@ async fn main() -> anyhow::Result<()>{
             let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "Scanning with NVD (may be slow due to rate limits)...".yellow());
             get_vulns_nvd(&programs).await?;
+            println!("{}", "Extended information will be available in bluescan.log".cyan().bold());
         } if args.contains(&"-v".to_string()) {
             let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "Scanning with OSV (fast, no rate limits)...".green());
             scan_with_osv(&programs).await?;
+            println!("{}", "Extended information will be available in bluescan.log".cyan().bold());
         } if args.contains(&"-h".to_string()) {
             let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "HYBRID SCAN: OSV + NVD fallback (RECOMMENDED)".cyan().bold());
             hybrid_scan(&programs).await?;
+            println!("{}", "Extended information will be available in bluescan.log".cyan().bold());
         }
         
     } else {
@@ -330,8 +333,6 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
             Ok(osv_query::ScanResult::Unchecked(_reason)) => {
                 info!("{}", _reason.yellow());
                 unverified_count += 1;
-                // Optionally show reason in verbose mode:
-                // info!("    {}", reason.dimmed());
             }
             Err(e) => {
                 info!("{} Error: {}", "✗".red(), e.to_string().dimmed());
@@ -370,7 +371,7 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         println!("\n{}", "⚠ WARNING:".yellow().bold());
         println!("Some or most programs could not be verfied because they're not found in likely package ecosystems.");
         println!("OSV primarily covers open-source packages from npm, PyPI, Maven, etc.");
-        println!("For comprehensive Windows application scanning, consider using NVD");
+        println!("For comprehensive application scanning, consider using NVD");
         println!("or a dedicated Windows vulnerability scanner.");
     }
     

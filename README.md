@@ -4,7 +4,7 @@ BlueScan is a cross-platform command-line tool written in Rust that identifies i
 
 ## Features
 
-- **Cross-Platform:** Works on both **Windows** and **Linux**.
+- **Cross-Platform:** Works on **Windows**, **Linux**, and **macOS**.
 - **Application Scanning:** Detects installed applications to analyze.
 - **Dual Vulnerability Sources:**
     - **NVD Scan:** Scans against the NIST National Vulnerability Database. This is thorough but subject to strict rate limits.
@@ -52,3 +52,5 @@ To run the recommended hybrid scan:
 ```sh
 ./target/release/bluescan -h
 ```
+
+In addition to console output, a detailed log of the scan process, including all checks and findings, is written to `bluescan.log` in the project root directory.
