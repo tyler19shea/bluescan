@@ -73,19 +73,9 @@ async fn main() -> anyhow::Result<()>{
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
-fn get_installed_programs() -> Vec<InstalledProgram> {
-    match windows::installed_programs::get_installed_programs() {
-        Ok(programs) => programs,
-        Err(e) => {
-            eprintln!("Error getting installed programs: {}", e);
-            Vec::new()
-        }
-    }
-}
 
-#[cfg(target_os = "linux")]
 fn get_installed_programs() -> Vec<InstalledProgram> {
+    #[cfg(target_os = "linux")]
     match linux::linuxos::get_installed_programs() {
         Ok(programs) => programs,
         Err(e) => {
@@ -93,10 +83,15 @@ fn get_installed_programs() -> Vec<InstalledProgram> {
             Vec::new()
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn get_installed_programs() -> Vec<InstalledProgram> {
+    #[cfg(target_os = "windows")]
+    match windows::installed_programs::get_installed_programs() {
+        Ok(programs) => programs,
+        Err(e) => {
+            eprintln!("Error getting installed programs: {}", e);
+            Vec::new()
+        }
+    }
+    #[cfg(target_os = "macos")]
     match macos::macos_programs::get_installed_programs() {
         Ok(programs) => programs,
         Err(e) => {
@@ -104,12 +99,12 @@ fn get_installed_programs() -> Vec<InstalledProgram> {
             Vec::new()
         }
     }
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-fn get_installed_programs() -> Vec<InstalledProgram> {
-    eprintln!("Unsupported OS: This feature is only available on Windows and Linux.");
-    Vec::new()
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        eprintln!("Unsupported OS: This feature is only available on Windows and Linux.");
+        Vec::new()
+    }
+ 
 }
 
 async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
