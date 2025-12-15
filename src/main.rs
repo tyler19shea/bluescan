@@ -9,10 +9,12 @@ mod nvd_query;
 mod osv_query; 
 mod get_os_info;
 
-use std::{fs::OpenOptions, io::{self, Write}, result::Result::Ok};
-//use anyhow::Ok;
+use std::{fs::{File, OpenOptions}, io::{self, Write}, result::Result::Ok};
 use colored::*;
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{info};
 use serde::Serialize;
+use simplelog::{Config, LevelFilter, WriteLogger};
 use std::env::args;
 
 #[derive(Debug, Serialize)]
@@ -33,6 +35,7 @@ pub struct OSInfo {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()>{
+    // let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
     let args: Vec<String> = args().collect();
     let programs = get_installed_programs();
 
@@ -56,12 +59,15 @@ async fn main() -> anyhow::Result<()>{
                 println!("{} - {}", p.name.purple(), p.version.clone().unwrap_or("N/A".into()));
             }
         } if args.contains(&"-s".to_string()) {
+            let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "Scanning with NVD (may be slow due to rate limits)...".yellow());
             get_vulns_nvd(&programs).await?;
         } if args.contains(&"-v".to_string()) {
+            let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "Scanning with OSV (fast, no rate limits)...".green());
             scan_with_osv(&programs).await?;
         } if args.contains(&"-h".to_string()) {
+            let _ = WriteLogger::init(LevelFilter::Info, Config::default(), File::create("bluescan.log").unwrap());
             println!("{}", "HYBRID SCAN: OSV + NVD fallback (RECOMMENDED)".cyan().bold());
             hybrid_scan(&programs).await?;
         }
@@ -111,42 +117,46 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut vulnerable_count = 0;
     let mut safe_count = 0;
     let mut nvd_checked_count = 0;
-    let mut scanned_count = 0;
     let mut vulnerable_programs: Vec<String> = Vec::new();
+    let bar = ProgressBar::new(programs.len() as u64);
+    bar.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+        .unwrap()
+        .progress_chars("#>-"));
     
     println!("\n{}", "Starting HYBRID vulnerability scan...".cyan().bold());
     println!("{}", "Strategy: Try OSV first (fast), fallback to NVD for unchecked programs".dimmed());
     println!("{}", "=".repeat(70).cyan());
     
     for program in programs {
-        scanned_count += 1;
+        bar.inc(1);
         let version = program.version.clone().unwrap_or("unknown".into());
         
-        println!("\n[{}/{}] {}", scanned_count, programs.len(), 
+        info!("\n[{}/{}] {}", bar.position(), bar.length().unwrap(), 
                  format!("{} {}", program.name.bright_white(), version.dimmed()).bold());
         
         // STEP 1: Try OSV first (fast, no rate limits)
         match osv_query::search_vulns_osv(program).await {
             Ok(osv_query::ScanResult::Vulnerable(vulns)) => {
-                println!("  {} OSV: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                info!("  {} OSV: Found {} vulnerabilities", "⚠".red(), vulns.len());
                 vulnerable_count += 1;
                 for v in &vulns {
-                    println!("    {}", v.yellow());
+                    info!("    {}", v.yellow());
                 }
                 continue; // Found in OSV, no need to check NVD
             }
             Ok(osv_query::ScanResult::Safe) => {
-                println!("  {} OSV: Checked in package ecosystems - Safe", "✓".green());
+                info!("  {} OSV: Checked in package ecosystems - Safe", "✓".green());
                 safe_count += 1;
                 continue; // Verified safe in OSV
             }
             Ok(osv_query::ScanResult::Unchecked(_reason)) => {
-                println!("  {} OSV: Not in package ecosystem", "○".dimmed());
-                println!("  {} Falling back to NVD...", "→".cyan());
+                info!("  {} OSV: Not in package ecosystem", "○".dimmed());
+                info!("  {} Falling back to NVD...", "→".cyan());
                 // Fall through to NVD check
             }
             Err(e) => {
-                println!("  {} OSV Error: {}", "✗".red(), e.to_string().dimmed());
+                info!("  {} OSV Error: {}", "✗".red(), e.to_string().dimmed());
                 // Fall through to NVD check
             }
         }
@@ -156,36 +166,37 @@ async fn hybrid_scan(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         
         // Add delay to respect NVD rate limits (5 requests per 30 seconds)
         if nvd_checked_count > 1 {
-            println!("  {} Waiting 6 seconds (NVD rate limit)...", "⏱".yellow());
+            info!("  {} Waiting 6 seconds (NVD rate limit)...", "⏱".yellow());
             tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
         }
         
         match check_nvd_with_timeout(program).await {
             Ok(vulns) => {
                 if vulns.is_empty() {
-                    println!("  {} NVD: No known vulnerabilities", "✓".green());
+                    info!("  {} NVD: No known vulnerabilities", "✓".green());
                     safe_count += 1;
                 } else {
-                    println!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                    info!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
                     vulnerable_count += 1;
                     for v in &vulns {
-                        println!("    {}", v.yellow());
+                        info!("    {}", v.yellow());
                     }
                     vulnerable_programs.extend(vulns);
                 }
             }
             Err(e) => {
-                println!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
+                info!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
             }
         }
     }
+    bar.finish_with_message("Scan complete");
     match write_file(&vulnerable_programs) {
-        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
-        Err(e) => println!("Error writing to file {}", e),
+        Ok(_) => info!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => info!("Error writing to file {}", e),
     }
     println!("\n{}", "=".repeat(70).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
-    println!("Total programs scanned: {}", scanned_count);
+    println!("Total programs scanned: {}", bar.length().unwrap());
     println!("Vulnerable programs: {}", 
              if vulnerable_count > 0 { 
                  vulnerable_count.to_string().red().to_string() 
@@ -222,44 +233,48 @@ async fn get_vulns_nvd(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut vulnerable_count = 0;
     let mut safe_count = 0;
     let mut failed_count = 0;
-    let mut scanned_count = 0;
     let mut vulnerable_programs: Vec<String> = Vec::new();
+    let bar = ProgressBar::new(programs.len() as u64);
+    bar.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+        .unwrap()
+        .progress_chars("#>-"));
     
     println!("\n{}", "Starting NVD vulnerability scan...".cyan().bold());
     for program in programs {
+        bar.inc(1);
         tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
         match check_nvd_with_timeout(program).await {
             Ok(vulns) => {
                 if vulns.is_empty() {
                     match &program.version {
-                        Some(version) => println!("  {} NVD: No known vulnerabilities of {} {:?}", "✓".green(), program.name, version),
-                        None => println!("No Version found for {}", program.name),
+                        Some(version) => info!("  {} NVD: No known vulnerabilities of {} {:?}", "✓".green(), program.name, version),
+                        None => info!("No Version found for {}", program.name),
                     }
                     safe_count += 1;
                 } else {
-                    println!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
+                    info!("  {} NVD: Found {} vulnerabilities", "⚠".red(), vulns.len());
                     for v in &vulns {
-                        println!("    {}", v.yellow());
+                        info!("    {}", v.yellow());
                     }
                     vulnerable_programs.extend(vulns);
                     vulnerable_count += 1;
                 }
-                scanned_count += 1;
             }
             Err(e) => {
-                println!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
+                info!("  {} NVD Error: {}", "✗".red(), e.to_string().dimmed());
                 failed_count += 1;
             }
         }
-        scanned_count += 1
     }
+    bar.finish_with_message("Scan complete");
     match write_file(&vulnerable_programs) {
-        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
-        Err(e) => println!("Error writing to file {}", e),
+        Ok(_) => info!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => info!("Error writing to file {}", e),
     }
     println!("\n{}", "=".repeat(70).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
-    println!("Total programs scanned: {}", scanned_count);
+    println!("Total programs scanned: {}", bar.length().unwrap());
     println!("Vulnerable programs: {}", 
              if vulnerable_count > 0 { 
                  vulnerable_count.to_string().red().to_string() 
@@ -282,40 +297,44 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
     let mut safe_count = 0;
     let mut unchecked_count = 0;
     let mut unverified_count = 0;
-    let mut scanned_count = 0;
     let mut vulnerable_programs: Vec<String> = Vec::new();
+    let bar = ProgressBar::new(programs.len() as u64);
+    bar.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+        .unwrap()
+        .progress_chars("#>-"));
     
     println!("\n{}", "Starting vulnerability scan...".cyan().bold());
     println!("{}", "=".repeat(60).cyan());
     
     for program in programs {
-        scanned_count += 1;
+        bar.inc(1);
         let version = program.version.clone().unwrap_or("unknown".into());
         
-        print!("[{}/{}] Checking {} {}... ", 
-               scanned_count, programs.len(), program.name.bright_white(), version.dimmed());
+        info!("[{}/{}] Checking {} {}... ", 
+               bar.position(), bar.length().unwrap(), program.name.bright_white(), version.dimmed());
         
         match osv_query::search_vulns_osv(program).await {
             Ok(osv_query::ScanResult::Vulnerable(vulns)) => {
-                println!("{} {} vulnerabilities found", "⚠".red(), vulns.len());
+                info!("{} {} vulnerabilities found", "⚠".red(), vulns.len());
                 vulnerable_count += 1;
                 for v in &vulns {
-                    println!("    {}", v.yellow());
+                    info!("    {}", v.yellow());
                 }
                 vulnerable_programs.extend(vulns);
             }
             Ok(osv_query::ScanResult::Safe) => {
-                println!("{}", "✓ Safe (checked in package ecosystems)".green());
+                info!("{}", "✓ Safe (checked in package ecosystems)".green());
                 safe_count += 1;
             }
             Ok(osv_query::ScanResult::Unchecked(_reason)) => {
-                println!("{}", _reason.yellow());
+                info!("{}", _reason.yellow());
                 unverified_count += 1;
                 // Optionally show reason in verbose mode:
-                // println!("    {}", reason.dimmed());
+                // info!("    {}", reason.dimmed());
             }
             Err(e) => {
-                println!("{} Error: {}", "✗".red(), e.to_string().dimmed());
+                info!("{} Error: {}", "✗".red(), e.to_string().dimmed());
                 unchecked_count += 1;
             }
         }
@@ -323,13 +342,14 @@ async fn scan_with_osv(programs: &[InstalledProgram]) -> anyhow::Result<()> {
         // Small delay to be nice to the API
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
+    bar.finish_with_message("Scan complete");
     match write_file(&vulnerable_programs) {
-        Ok(_) => println!("Wrote vulnerable programs to vulnerable.txt"),
-        Err(e) => println!("Error writing to file {}", e),
+        Ok(_) => info!("Wrote vulnerable programs to vulnerable.txt"),
+        Err(e) => info!("Error writing to file {}", e),
     }
     println!("\n{}", "=".repeat(60).cyan());
     println!("{}", "Scan Complete!".cyan().bold());
-    println!("Total programs scanned: {}", scanned_count);
+    println!("Total programs scanned: {}", bar.length().unwrap());
     println!("Vulnerable programs: {}", 
              if vulnerable_count > 0 { 
                  vulnerable_count.to_string().red().to_string() 

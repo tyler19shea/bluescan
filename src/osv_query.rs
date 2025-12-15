@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use crate::InstalledProgram;
 use std::result::Result::Ok;
+use log::info;
 
 #[derive(Debug, Serialize)]
 struct OsvQuery {
@@ -63,7 +64,7 @@ const ECOSYSTEMS: &[&str] = &[
 
 /// Try multiple strategies to find vulnerabilities
 pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> {
-    println!("  → Starting OSV scan for: {}", program.name);
+    info!("  → Starting OSV scan for: {}", program.name);
     
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -74,30 +75,30 @@ pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> 
     let mut check_likely_ecosystem: bool = false;
     
     // STRATEGY 1: Try likely ecosystems
-    println!("  → Strategy 1: Trying likely ecosystems...");
+    info!("  → Strategy 1: Trying likely ecosystems...");
     let likely_ecosystems = guess_ecosystems(&program.name);
     
     if !likely_ecosystems.is_empty() {
-        println!("    Likely ecosystems: {:?}", likely_ecosystems);
+        info!("    Likely ecosystems: {:?}", likely_ecosystems);
         checked_any_ecosystem = true;
         check_likely_ecosystem = true;
         
         for ecosystem in &likely_ecosystems {
-            println!("    Querying OSV with ecosystem: {}", ecosystem);
+            info!("    Querying OSV with ecosystem: {}", ecosystem);
             if let Ok(results) = query_osv_with_ecosystem(&client, &program.name, &version, ecosystem).await {
                 if !results.is_empty() {
-                    println!("    ✓ Found vulnerabilities in {} ecosystem!", ecosystem);
+                    info!("    ✓ Found vulnerabilities in {} ecosystem!", ecosystem);
                     return Ok(ScanResult::Vulnerable(results));
                 }
             }
         }
-        println!("    Checked likely ecosystems - no vulnerabilities found");
+        info!("    Checked likely ecosystems - no vulnerabilities found");
     } else {
-        println!("    No likely ecosystems detected for this program");
+        info!("    No likely ecosystems detected for this program");
     }
     
     // STRATEGY 2: Try all ecosystems
-    println!("  → Strategy 2: Trying all ecosystems...");
+    info!("  → Strategy 2: Trying all ecosystems...");
     for &ecosystem in ECOSYSTEMS {
         if likely_ecosystems.contains(&ecosystem) {
             continue;
@@ -106,14 +107,14 @@ pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> 
         
         if let Ok(results) = query_osv_with_ecosystem(&client, &program.name, &version, ecosystem).await {
             if !results.is_empty() {
-                println!("    ✓ Found vulnerabilities in {} ecosystem!", ecosystem);
+                info!("    ✓ Found vulnerabilities in {} ecosystem!", ecosystem);
                 return Ok(ScanResult::Vulnerable(results));
             }
         }
     }
     
     // STRATEGY 3: Try name variations
-    println!("\n  → Strategy 3: Trying name variations...");
+    info!("\n  → Strategy 3: Trying name variations...");
     let name_variations = get_name_variations(&program.name);
     
     for name_var in &name_variations {
@@ -126,7 +127,7 @@ pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> 
             
             if let Ok(results) = query_osv_with_ecosystem(&client, name_var, &version, ecosystem).await {
                 if !results.is_empty() {
-                    println!("    ✓ Found vulnerabilities using name '{}' in {} ecosystem!", name_var, ecosystem);
+                    info!("    ✓ Found vulnerabilities using name '{}' in {} ecosystem!", name_var, ecosystem);
                     return Ok(ScanResult::Vulnerable(results));
                 }
             }
@@ -135,13 +136,13 @@ pub async fn search_vulns_osv(program: &InstalledProgram) -> Result<ScanResult> 
     
     // DECISION POINT
     if checked_any_ecosystem && check_likely_ecosystem {
-        println!("  → Program checked across ecosystems - appears safe ({:?})", likely_ecosystems);
+        info!("  → Program checked across ecosystems - appears safe ({:?})", likely_ecosystems);
         Ok(ScanResult::Safe)
     } else if checked_any_ecosystem {
         Ok(ScanResult::Unchecked(
             format!("\nProgram '{}' was checked but not able to verify ecosystem", program.name)))
     } else {
-        println!("  → Could not check this program (not in any known ecosystem)");
+        info!("  → Could not check this program (not in any known ecosystem)");
         Ok(ScanResult::Unchecked(
             format!("Program '{}' is not in any known package ecosystem (npm, PyPI, NuGet, etc.). \
                     This is common for standalone Windows applications.", program.name)
@@ -170,7 +171,7 @@ async fn query_osv_with_ecosystem(
         },
     };
     
-    print!("ecosystem checked='{}'::", ecosystem);
+    info!("ecosystem checked='{}'::", ecosystem);
 
     let response = client
         .post(url)
@@ -179,7 +180,7 @@ async fn query_osv_with_ecosystem(
         .await?;
     
     if !response.status().is_success() {
-        println!("      ✗ OSV returned error status: {}", response.status());
+        info!("      ✗ OSV returned error status: {}", response.status());
         return Ok(Vec::new());
     }
 
@@ -187,11 +188,11 @@ async fn query_osv_with_ecosystem(
     let osv_response: OsvResponse = response.json().await?;
     
     if osv_response.vulns.is_empty() {
-         println!("      ✓ Found {} vulnerabilities!", osv_response.vulns.len());
+         info!("      ✓ Found {} vulnerabilities!", osv_response.vulns.len());
         return Ok(Vec::new());
     }
 
-    println!("      ✓ Found {} vulnerabilities!", osv_response.vulns.len());
+    info!("      ✓ Found {} vulnerabilities!", osv_response.vulns.len());
     
     let mut results = Vec::new();
     
@@ -236,58 +237,58 @@ fn guess_ecosystems(name: &str) -> Vec<&'static str> {
     let name_lower = name.to_lowercase();
     let mut ecosystems = Vec::new();
     
-    println!("    Analyzing program name: '{}'", name);
+    info!("    Analyzing program name: '{}'", name);
     
     // Python-related keywords
     if name_lower.contains("python") || name_lower.contains("pip") || name_lower.contains("conda") {
-        println!("      → Detected Python-related keywords → PyPI");
+        info!("      → Detected Python-related keywords → PyPI");
         ecosystems.push("PyPI");
     }
     
     // Node.js-related keywords
     if name_lower.contains("node") || name_lower.contains("npm") || name_lower.contains("yarn") {
-        println!("      → Detected Node.js-related keywords → npm");
+        info!("      → Detected Node.js-related keywords → npm");
         ecosystems.push("npm");
     }
     
     // .NET-related keywords
     if name_lower.contains(".net") || name_lower.contains("nuget") || name_lower.contains("dotnet") {
-        println!("      → Detected .NET-related keywords → NuGet");
+        info!("      → Detected .NET-related keywords → NuGet");
         ecosystems.push("NuGet");
     }
     
     // Java-related keywords
     if name_lower.contains("java") || name_lower.contains("maven") || name_lower.contains("jdk") {
-        println!("      → Detected Java-related keywords → Maven");
+        info!("      → Detected Java-related keywords → Maven");
         ecosystems.push("Maven");
     }
     
     // Rust-related keywords
     if name_lower.contains("rust") || name_lower.contains("cargo") {
-        println!("      → Detected Rust-related keywords → crates.io");
+        info!("      → Detected Rust-related keywords → crates.io");
         ecosystems.push("crates.io");
     }
     
     // Go-related keywords
     if name_lower.contains("golang") || name_lower.contains(" go ") {
-        println!("      → Detected Go-related keywords → Go");
+        info!("      → Detected Go-related keywords → Go");
         ecosystems.push("Go");
     }
     
     // PHP-related keywords
     if name_lower.contains("php") || name_lower.contains("composer") {
-        println!("      → Detected PHP-related keywords → Packagist");
+        info!("      → Detected PHP-related keywords → Packagist");
         ecosystems.push("Packagist");
     }
     
     // Ruby-related keywords
     if name_lower.contains("ruby") || name_lower.contains("gem") {
-        println!("      → Detected Ruby-related keywords → RubyGems");
+        info!("      → Detected Ruby-related keywords → RubyGems");
         ecosystems.push("RubyGems");
     }
     
     if ecosystems.is_empty() {
-        println!("      → No specific ecosystem detected");
+        info!("      → No specific ecosystem detected");
     }
     
     ecosystems
